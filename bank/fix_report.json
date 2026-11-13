@@ -1,0 +1,14 @@
+{
+  "fixed_tf_options": 0,
+  "recovered_answers": 0,
+  "image_index": 39461,
+  "questions_with_image": 20581,
+  "questions_all_images_ready": 20579,
+  "image_refs": 122605,
+  "image_refs_ready": 122603,
+  "missing_unique": 2,
+  "missing_sample": [
+    "formula-2c7a9ff6774e3af2.png",
+    "formula-4daf9a3762c10376.png"
+  ]
+}
