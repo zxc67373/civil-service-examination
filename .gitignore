@@ -1,27 +1,18 @@
-# 大文件与本地数据（GitHub 100MB 上限）
+# 原始大文件不入库（GitHub 100MB 限制），入库压缩版
 bank/tiku.db
 bank/questions.jsonl
 bank/*.db
 bank/*.jsonl
+!bank/*.db.gz
 
-# 克隆的题库仓库（另仓管理）
+# 克隆的题库仓库（另仓管理/脚本拉取）
 xingcezhenti/
 
-# 图片与下载产物
+# 日志与临时
 *.part
-download_images.log
+*.log
 download_images.out
 download_images.failed
-ocr_full.log
-ocr_batch500.log
-ocr_formulas.log
-
-# Python
 __pycache__/
 *.pyc
-*.pyo
 .venv/
-
-# 临时
-/tmp/
-*.log
