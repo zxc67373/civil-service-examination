@@ -185,7 +185,8 @@ def _render_chafa(path: Path, max_width: int, max_height: int) -> str | None:
             cmd = [
                 "chafa",
                 "--size", f"{max_width}x{max_height}",
-                "--symbols", "half",
+                "--symbols", "block",
+                "-c", "none",
                 "--animate", "off",
                 "--relative", "off",
                 "--polite", "on",
@@ -278,7 +279,7 @@ def _render_braille(path: Path, max_width: int, max_height: int) -> str:
     return f"{header}\n{body}\n{footer}"
 
 
-def image_to_text(path: Path, max_width: int = 110, max_height: int = 40) -> str:
+def image_to_text(path: Path, max_width: int = 150, max_height: int = 48) -> str:
     """终端图片渲染（图表类）：chafa block 真彩，失败回退盲文。"""
     if not path.is_file():
         return dim(f"[图片未下载: {path.name}]")
@@ -349,7 +350,7 @@ def render_markup(text: str, show_images: bool = True) -> str:
         if p is None:
             return dim(f"[图未下载:{fname}]")
         # 图表/照片：需要更高分辨率看清结构
-        return "\n" + image_to_text(p, max_width=110, max_height=40) + "\n"
+        return "\n" + image_to_text(p, max_width=150, max_height=48) + "\n"
 
     out = re.sub(r"\{\{tex:([^}]+)\}\}", repl_tex, text)
     out = re.sub(r"\{\{img:([^}]+)\}\}", repl_img, out)
