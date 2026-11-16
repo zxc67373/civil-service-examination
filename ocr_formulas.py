@@ -77,7 +77,7 @@ def main():
     if not todo:
         return 0
     n = 0
-    with ProcessPoolExecutor(max_workers=8) as ex:
+    with ProcessPoolExecutor(max_workers=1) as ex:
         futs = [ex.submit(ocr_one, it) for it in todo]
         for fut in as_completed(futs):
             name, text = fut.result()
