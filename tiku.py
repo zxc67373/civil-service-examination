@@ -177,6 +177,16 @@ def _render_chafa(path: Path, max_width: int, max_height: int) -> str | None:
             factor = max(2, min(6, int(160 / max(w, 1)) or 2))
             from PIL import Image as _Image
             im = im.resize((w * factor, h * factor), _Image.Resampling.NEAREST)
+        # 确保白底黑线：深色背景反转，避免 chafa 渲染出网格噪点
+        from PIL import ImageOps
+        g = im.convert("L")
+        # 统计四角亮度判断背景
+        w, h = g.size
+        corners = [g.getpixel((0,0)), g.getpixel((w-1,0)),
+                   g.getpixel((0,h-1)), g.getpixel((w-1,h-1))]
+        if sum(corners) / 4 < 128:  # 深色背景 → 反转
+            g = ImageOps.invert(g)
+            im = g.convert("RGB")
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
             tmp = Path(tf.name)
         try:
@@ -279,7 +289,7 @@ def _render_braille(path: Path, max_width: int, max_height: int) -> str:
     return f"{header}\n{body}\n{footer}"
 
 
-def image_to_text(path: Path, max_width: int = 150, max_height: int = 48) -> str:
+def image_to_text(path: Path, max_width: int = 180, max_height: int = 56) -> str:
     """终端图片渲染（图表类）：chafa block 真彩，失败回退盲文。"""
     if not path.is_file():
         return dim(f"[图片未下载: {path.name}]")
@@ -350,7 +360,7 @@ def render_markup(text: str, show_images: bool = True) -> str:
         if p is None:
             return dim(f"[图未下载:{fname}]")
         # 图表/照片：需要更高分辨率看清结构
-        return "\n" + image_to_text(p, max_width=150, max_height=48) + "\n"
+        return "\n" + image_to_text(p, max_width=180, max_height=56) + "\n"
 
     out = re.sub(r"\{\{tex:([^}]+)\}\}", repl_tex, text)
     out = re.sub(r"\{\{img:([^}]+)\}\}", repl_img, out)
