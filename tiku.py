@@ -17,8 +17,6 @@ import sys
 from pathlib import Path
 
 DB = Path("/root/civil-service-examination/bank/tiku.db")
-IMG_ROOT = Path("/root/civil-service-examination/xingcezhenti/90-图片")
-IMG_INDEX = Path("/root/civil-service-examination/bank/image_index.json")
 CHECK = "✅"
 _img_idx: dict[str, str] | None = None
 
@@ -57,253 +55,6 @@ def dim(t: str) -> str:
     return c(t, "2")
 
 
-# ── 图片 → 文本（二值化 ASCII） ──────────────────────
-def _load_img_index() -> dict[str, str]:
-    global _img_idx
-    if _img_idx is None:
-        if IMG_INDEX.is_file():
-            try:
-                _img_idx = json.loads(IMG_INDEX.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                _img_idx = {}
-        else:
-            _img_idx = {}
-    return _img_idx
-
-
-def refresh_image_index() -> int:
-    """扫描 90-图片 重建索引。"""
-    global _img_idx
-    idx: dict[str, str] = {}
-    if IMG_ROOT.is_dir():
-        for p in IMG_ROOT.rglob("*"):
-            if p.is_file() and not p.name.endswith(".part"):
-                idx[p.name] = str(p)
-    IMG_INDEX.parent.mkdir(parents=True, exist_ok=True)
-    IMG_INDEX.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
-    _img_idx = idx
-    return len(idx)
-
-
-def find_image(fname: str) -> Path | None:
-    """按文件名在 90-图片 下查找（优先索引）。"""
-    if not fname:
-        return None
-    p = Path(fname)
-    if p.is_file():
-        return p
-    idx = _load_img_index()
-    hit = idx.get(fname)
-    if hit and Path(hit).is_file():
-        return Path(hit)
-    # 索引未命中时兜底扫盘（可能刚下载）
-    if IMG_ROOT.is_dir():
-        for sub in IMG_ROOT.rglob(fname):
-            if sub.is_file():
-                idx[fname] = str(sub)
-                return sub
-    return None
-
-
-# Braille 点阵位序（Unicode U+2800）：每字符 2 列 × 4 行 = 8 点
-#  (0,0)->bit0  (1,0)->bit3
-#  (0,1)->bit1  (1,1)->bit4
-#  (0,2)->bit2  (1,2)->bit5
-#  (0,3)->bit6  (1,3)->bit7
-_BRAILLE_BITS = (
-    (0x01, 0x08),
-    (0x02, 0x10),
-    (0x04, 0x20),
-    (0x40, 0x80),
-)
-
-
-def _otsu_threshold(im) -> int:
-    hist = im.histogram()
-    total = sum(hist) or 1
-    sum_all = sum(i * h for i, h in enumerate(hist))
-    sum_b = 0.0
-    w_b = 0
-    best_t, best_var = 128, -1.0
-    for t in range(256):
-        w_b += hist[t]
-        if w_b == 0:
-            continue
-        w_f = total - w_b
-        if w_f == 0:
-            break
-        sum_b += t * hist[t]
-        m_b = sum_b / w_b
-        m_f = (sum_all - sum_b) / w_f
-        var = w_b * w_f * (m_b - m_f) ** 2
-        if var > best_var:
-            best_var, best_t = var, t
-    if best_t < 10 or best_t > 245:
-        best_t = 128
-    return best_t
-
-
-def _flatten_to_rgb(path: Path):
-    """透明底铺白，返回 RGB。"""
-    from PIL import Image
-    im = Image.open(path)
-    if im.mode == "P":
-        im = im.convert("RGBA")
-    if im.mode in ("RGBA", "LA"):
-        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-        im = Image.alpha_composite(bg, im.convert("RGBA"))
-    return im.convert("RGB")
-
-
-def _chafa_available() -> bool:
-    import shutil
-    return shutil.which("chafa") is not None
-
-
-def _render_chafa(path: Path, max_width: int, max_height: int) -> str | None:
-    """用 chafa 渲染（真彩终端最佳）。失败返回 None 走盲文。"""
-    import shutil
-    import subprocess
-    import tempfile
-    from PIL import Image
-
-    if not _chafa_available():
-        return None
-    try:
-        im = _flatten_to_rgb(path)
-        # 小图先放大，笔画更清楚
-        w, h = im.size
-        if w < 80 or h < 40:
-            factor = max(2, min(6, int(160 / max(w, 1)) or 2))
-            from PIL import Image as _Image
-            im = im.resize((w * factor, h * factor), _Image.Resampling.NEAREST)
-        # 确保白底黑线：深色背景反转，避免 chafa 渲染出网格噪点
-        from PIL import ImageOps
-        g = im.convert("L")
-        # 统计四角亮度判断背景
-        w, h = g.size
-        corners = [g.getpixel((0,0)), g.getpixel((w-1,0)),
-                   g.getpixel((0,h-1)), g.getpixel((w-1,h-1))]
-        if sum(corners) / 4 < 128:  # 深色背景 → 反转
-            g = ImageOps.invert(g)
-            im = g.convert("RGB")
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-            tmp = Path(tf.name)
-        try:
-            im.save(tmp)
-            # 终端深色/浅色：让 chafa 自己猜；限制尺寸
-            cmd = [
-                "chafa",
-                "--size", f"{max_width}x{max_height}",
-                "--symbols", "block",
-                "-c", "none",
-                "--animate", "off",
-                "--relative", "off",
-                "--polite", "on",
-                str(tmp),
-            ]
-            r = subprocess.run(cmd, capture_output=True, timeout=8)
-            if r.returncode != 0 or not r.stdout:
-                return None
-            out = r.stdout.decode("utf-8", errors="replace")
-            # 去掉光标显隐等控制序列，保留颜色码
-            out = re.sub(r"\x1b\[\?[0-9;]*[a-zA-Z]", "", out)
-            out = out.rstrip()
-            if not out.strip():
-                return None
-            return out
-        finally:
-            tmp.unlink(missing_ok=True)
-    except Exception:
-        return None
-
-
-def _render_braille(path: Path, max_width: int, max_height: int) -> str:
-    """盲文点阵降级渲染。"""
-    from PIL import Image
-
-    im = Image.open(path)
-    if im.mode in ("RGBA", "LA", "P"):
-        im = im.convert("RGBA")
-        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-        im = Image.alpha_composite(bg, im)
-    im = im.convert("L")
-
-    w0, h0 = im.size
-    if w0 < 80 or h0 < 40:
-        factor = max(2, min(6, int(120 / max(w0, 1)) or 2))
-        im = im.resize((w0 * factor, h0 * factor), Image.Resampling.NEAREST)
-        w0, h0 = im.size
-
-    cap_w = max_width * 2
-    cap_h = max_height * 4
-    if w0 > cap_w or h0 > cap_h:
-        scale = min(cap_w / w0, cap_h / h0)
-        nw = max(2, int(w0 * scale))
-        nh = max(4, int(h0 * scale))
-        im = im.resize((nw * 2, nh * 2), Image.Resampling.LANCZOS)
-        im = im.resize((nw, nh), Image.Resampling.BOX)
-    else:
-        nw, nh = w0, h0
-
-    th = _otsu_threshold(im)
-    px = im.load()
-    fg = [[px[x, y] < th for x in range(nw)] for y in range(nh)]
-    ratio = sum(sum(row) for row in fg) / max(nw * nh, 1)
-    if ratio < 0.005:
-        return dim(f"[图片近乎全白: {path.name}]")
-    if ratio > 0.93:
-        fg = [[not v for v in row] for row in fg]
-
-    pad_w = (2 - nw % 2) % 2
-    pad_h = (4 - nh % 4) % 4
-    if pad_w:
-        for row in fg:
-            row.extend([False] * pad_w)
-        nw += pad_w
-    if pad_h:
-        for _ in range(pad_h):
-            fg.append([False] * nw)
-        nh += pad_h
-
-    lines_out = []
-    for by in range(0, nh, 4):
-        row_chars = []
-        for bx in range(0, nw, 2):
-            bits = 0
-            for dy in range(4):
-                b0, b1 = _BRAILLE_BITS[dy]
-                if fg[by + dy][bx]:
-                    bits |= b0
-                if bx + 1 < nw and fg[by + dy][bx + 1]:
-                    bits |= b1
-            row_chars.append(chr(0x2800 + bits) if bits else " ")
-        line = "".join(row_chars).rstrip()
-        if line:
-            lines_out.append(line)
-    if not lines_out:
-        return dim("[图片无可见前景]")
-    header = dim(f"┌─ {path.name} ({w0}x{h0})")
-    body = "\n".join("│ " + ln for ln in lines_out)
-    footer = dim("└" + "─" * 40)
-    return f"{header}\n{body}\n{footer}"
-
-
-def image_to_text(path: Path, max_width: int = 180, max_height: int = 56) -> str:
-    """终端图片渲染（图表类）：chafa block 真彩，失败回退盲文。"""
-    if not path.is_file():
-        return dim(f"[图片未下载: {path.name}]")
-    try:
-        rendered = _render_chafa(path, max_width, max_height)
-        if rendered is not None:
-            header = dim(f"┌─ {path.name}")
-            footer = dim("└" + "─" * 40)
-            return f"{header}\n{rendered}\n{footer}"
-        return _render_braille(path, max_width, max_height)
-    except Exception as e:  # noqa: BLE001
-        return dim(f"[图片渲染失败: {e}]")
-
-
 # ── 公式图 → 文本 ─────────────────────────────────────
 FORMULA_TEXT = Path("/root/civil-service-examination/bank/formula_text.json")
 _formula_text: dict[str, str] | None = None
@@ -330,40 +81,58 @@ def formula_to_text(fname: str) -> str | None:
     return text
 
 
+# ── 题图 → 文本（人工看图标注） ─────────────────────
+IMG_TEXT = Path("/root/civil-service-examination/bank/img_text.json")
+_img_text: dict[str, str] | None = None
+
+
+def _load_img_text() -> dict[str, str]:
+    global _img_text
+    if _img_text is None:
+        if IMG_TEXT.is_file():
+            try:
+                _img_text = json.loads(IMG_TEXT.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                _img_text = {}
+        else:
+            _img_text = {}
+    return _img_text
+
+
+def img_to_text(fname: str) -> str | None:
+    """题图文件名 → 人工标注文本；无标注返回 None。"""
+    text = _load_img_text().get(fname, "").strip()
+    return text or None
+
+
 def render_markup(text: str, show_images: bool = True) -> str:
     """渲染占位符：
-    - {{tex:xx}} 公式图 → 优先转真文本（OCR 映射），无则小图渲染
-    - {{img:xx}} 图表/题图 → chafa 大图渲染（结构图需要分辨率）
+    - {{tex:xx}} 公式图 → 公式文本映射（OCR）
+    - {{img:xx}} 题图 → 人工标注文本；无标注则直接删除占位
     """
     if not text:
         return ""
 
     def repl_tex(m: re.Match) -> str:
         fname = m.group(1)
-        # 1) 有文本映射 → 直接内联文字，最清晰
         t = formula_to_text(fname)
         if t is not None:
             return cyan(t) if supports_color() else t
-        if not show_images:
-            return dim(f"[式:{fname}]")
-        # 2) 无映射 → 小尺寸渲染兜底
-        p = find_image(fname)
-        if p is None:
-            return dim(f"[式未下载:{fname}]")
-        return "\n" + image_to_text(p, max_width=56, max_height=12) + "\n"
+        return ""  # 无文本则删除
 
     def repl_img(m: re.Match) -> str:
-        fname = m.group(1)
         if not show_images:
-            return dim(f"[图:{fname}]")
-        p = find_image(fname)
-        if p is None:
-            return dim(f"[图未下载:{fname}]")
-        # 图表/照片：需要更高分辨率看清结构
-        return "\n" + image_to_text(p, max_width=180, max_height=56) + "\n"
+            return ""
+        t = img_to_text(m.group(1))
+        if t is not None:
+            return cyan(t) if supports_color() else t
+        return ""  # 无标注则删除
 
     out = re.sub(r"\{\{tex:([^}]+)\}\}", repl_tex, text)
     out = re.sub(r"\{\{img:([^}]+)\}\}", repl_img, out)
+    # 清理因删除占位产生的连续空白
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
     return out
 
 
@@ -610,7 +379,6 @@ def menu_main(conn) -> None:
         print(f"  {cyan('4')}. 指定试卷逐题刷")
         print(f"  {cyan('5')}. 错题重练（本次会话）")
         print(f"  {cyan('6')}. 查看题库统计")
-        print(f"  {cyan('7')}. 刷新图片索引（下载完成后）")
         print(f"  {cyan('q')}. 退出")
         raw = prompt("选择> ")
         if raw == "q":
@@ -638,9 +406,6 @@ def menu_main(conn) -> None:
                 print(yellow("本次会话还没有错题"))
         elif raw == "6":
             menu_stats(conn)
-        elif raw == "7":
-            n = refresh_image_index()
-            print(green(f"已索引 {n} 张图片"))
         else:
             print(red("无效选择"))
 
@@ -816,18 +581,10 @@ def main() -> int:
     ap.add_argument("--year", help="年份，如 2024")
     ap.add_argument("--paper", help="试卷名")
     ap.add_argument("--random", type=int, metavar="N", help="随机抽 N 题")
-    ap.add_argument("--no-image", action="store_true", help="不渲染图片预览")
     ap.add_argument("--list", action="store_true", help="仅列出模块/年份")
-    ap.add_argument("--refresh-index", action="store_true", help="重建图片索引后退出")
     args = ap.parse_args()
 
-    if args.refresh_index:
-        n = refresh_image_index()
-        print(f"已索引 {n} 张图片 → {IMG_INDEX}")
-        return 0
-
     conn = connect()
-    show_img = not args.no_image
 
     if args.list:
         print("模块:")
@@ -856,7 +613,7 @@ def main() -> int:
             print("没有匹配的题目")
             return 1
         print(bold(f"共 {len(rows)} 题"))
-        quiz_loop(conn, rows, show_img=show_img)
+        quiz_loop(conn, rows)
         return 0
 
     # 交互菜单
