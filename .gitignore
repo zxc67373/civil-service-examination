@@ -16,3 +16,8 @@ download_images.failed
 __pycache__/
 *.pyc
 .venv/
+
+# 图片相关本地文件（不入库）
+bank/image_index.json
+bank/img_freq.json
+bank/known_missing_images.json
