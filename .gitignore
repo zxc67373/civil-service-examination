@@ -21,3 +21,4 @@ __pycache__/
 bank/image_index.json
 bank/img_freq.json
 bank/known_missing_images.json
+bank/formula_freq.json
